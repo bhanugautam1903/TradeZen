@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidUserSession(data) {
+      return data.keys().hasAll(['id', 'userId', 'email', 'ipAddress', 'userAgent', 'loginTimestamp']) &&
+             data.keys().size() == 6 &&
+             data.id is string && data.id.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.email is string && data.email.size() <= 200 &&
+             data.ipAddress is string && data.ipAddress.size() <= 100 &&
+             data.userAgent is string && data.userAgent.size() <= 500 &&
+             data.loginTimestamp is string && data.loginTimestamp.size() <= 100;
+    }
+
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    match /userSessions/{sessionId} {
+      allow create: if isValidId(sessionId) && isValidUserSession(incoming());
+      
+      allow read, delete: if true;
+      allow update: if false;
+    }
+  }
+}

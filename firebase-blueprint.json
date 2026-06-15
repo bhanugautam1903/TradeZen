@@ -1,0 +1,45 @@
+{
+  "entities": {
+    "UserSession": {
+      "title": "User Session",
+      "description": "A record of an authenticated user session.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "ipAddress": {
+          "type": "string"
+        },
+        "userAgent": {
+          "type": "string"
+        },
+        "loginTimestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "email",
+        "ipAddress",
+        "userAgent",
+        "loginTimestamp"
+      ]
+    }
+  },
+  "firestore": {
+    "userSessions/{sessionId}": {
+      "schema": {
+        "$ref": "#/entities/UserSession"
+      },
+      "description": "Records of user authentications and sessions"
+    }
+  }
+}

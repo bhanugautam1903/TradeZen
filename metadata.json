@@ -1,0 +1,6 @@
+{
+  "name": "StockSense AI Pro",
+  "description": "Predict. Explain. Protect. Next-generation AI-powered Investment Intelligence Platform utilizing sentiment analysis, explainable AI (SHAP), portfolio management, risk analytics, and fraud protection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
