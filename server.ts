@@ -432,8 +432,12 @@ async function updateRealTimeNews() {
                newsCount: result.news.length
               };
             }
-          } catch(e) {
-            console.error("AI sentiment calculation failed for", sym, e);
+          } catch(e: any) {
+            if (e.status === 429 || (e.message && e.message.includes("429"))) {
+               console.log(`[AI Sentiment] Rate limited for ${sym}, using fallback data.`);
+            } else {
+               console.error("AI sentiment calculation failed for", sym, e);
+            }
           }
         }
       }
