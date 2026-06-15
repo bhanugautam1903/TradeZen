@@ -4,6 +4,7 @@
  */
 
 import express from "express";
+import nodemailer from "nodemailer";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
@@ -83,6 +84,16 @@ if (geminiKey && geminiKey !== "MY_GEMINI_API_KEY") {
 }
 
 // Global In-Memory Persistent Database State
+async function syncUserToFirestore(user: any) {
+  if (db) {
+    try {
+      await setDoc(doc(db, "users", user.userId), user);
+    } catch (e) {
+      console.error("Firebase sync error:", e);
+    }
+  }
+}
+
 const DB = {
   users: [
     {
@@ -587,13 +598,14 @@ app.get("/api/user/profile", requireAuth, async (req: any, res) => {
   return res.json({ status: "success", profile: safeProfile });
 });
 
-app.post("/api/user/profile/update", requireAuth, (req: any, res) => {
+app.post("/api/user/profile/update", requireAuth, async (req: any, res) => {
   const { name, mobileNumber, country, currency } = req.body;
   if (name) req.user.name = name;
   if (mobileNumber) req.user.mobileNumber = mobileNumber;
   if (country) req.user.country = country;
   if (currency) req.user.currency = currency;
   
+  await syncUserToFirestore(req.user);
   appendAuditLog("Auth", "Info", `Profile updated for ${req.user.email}`, req.user.email);
   return res.json({ status: "success", message: "Profile updated successfully.", profile: req.user });
 });
@@ -638,6 +650,7 @@ app.post("/api/user/device/revoke", requireAuth, async (req: any, res) => {
   }));
 
   req.user.devices = dynamicDevices;
+  await syncUserToFirestore(req.user);
   appendAuditLog("Auth", "Warning", `Device access revoked for device ${deviceId}`, req.user.email);
   return res.json({ status: "success", devices: req.user.devices });
 });
@@ -743,7 +756,8 @@ app.post("/api/auth/register", async (req, res) => {
     isOtpVerified: true, // Auto-verified for immediate setup
     otpSecret: "STS_" + Math.floor(1000 + Math.random()*9000),
     portfolio: [] as PortfolioHolding[],
-    alerts: [] as AlertConfig[]
+    alerts: [] as AlertConfig[],
+    accountCreationDate: new Date().toISOString()
   };
 
   DB.users.push(newUser);
@@ -892,6 +906,95 @@ app.post("/api/auth/login", async (req, res) => {
   return res.json({ status: "success", session: responseUser, requires2fa });
 });
 
+app.post("/api/auth/send-email-otp", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ status: "error", message: "Email is required." });
+
+  const normalizedEmail = email.trim().toLowerCase();
+  
+  if (db) {
+    try {
+      const snap = await getDocs(collection(db, "users"));
+      const fsUsers: any[] = [];
+      snap.forEach(d => fsUsers.push(d.data()));
+      if (fsUsers.length > 0) {
+        for (const fsu of fsUsers) {
+          const idx = DB.users.findIndex(u => u.email === fsu.email);
+          if (idx !== -1) {
+            DB.users[idx] = fsu;
+          } else {
+            DB.users.push(fsu);
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  let user = DB.users.find(u => u.email === normalizedEmail);
+  if (!user) {
+    user = {
+      userId: `usr_${Date.now()}`,
+      email: normalizedEmail,
+      name: normalizedEmail.split("@")[0],
+      passwordHash: "OTP_MANAGED",
+      role: "User",
+      isTwoFactorSetup: true,
+      isOtpVerified: false,
+      portfolio: [],
+      alerts: [],
+      transactions: [],
+      devices: [],
+      loginHistory: [],
+      accountCreationDate: new Date().toISOString()
+    };
+    DB.users.push(user);
+    if (db) {
+      try { await setDoc(doc(db, "users", user.userId), user); } catch(e) { console.error("Firebase write error:", e); }
+    }
+    appendAuditLog("Auth", "Info", `Newly registered User via OTP: ${normalizedEmail}`, req.ip);
+  }
+
+  const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
+  user.otpSecret = generatedOtp;
+  user.otpExpiry = Date.now() + 5 * 60 * 1000;
+  
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '465'),
+        secure: parseInt(process.env.SMTP_PORT || '465') === 465, 
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      await transporter.sendMail({
+        from: `"Private Wealth Portal" <${process.env.SMTP_USER}>`,
+        to: normalizedEmail,
+        subject: "Your Authentication Code",
+        text: `Your OTP is: ${generatedOtp}. It will expire in 5 minutes.`,
+        html: `<p>Your secure OTP is: <strong>${generatedOtp}</strong></p><p>It will expire in 5 minutes.</p>`,
+      });
+      console.log(`[Email] Successfully sent OTP to ${normalizedEmail}`);
+    } catch (error) {
+      console.error("[Email Error] Failed to send email via SMTP", error);
+      return res.status(500).json({ status: "error", message: "Failed to send email. Please check SMTP configuration in Secrets." });
+    }
+  } else {
+    console.log(`[Email Mock] Sent OTP ${generatedOtp} to ${normalizedEmail} (SMTP not configured)`);
+    return res.status(500).json({ status: "error", message: "SMTP configuration is missing. Configure SMTP_HOST, SMTP_USER, and SMTP_PASS in Secrets to send real emails." });
+  }
+
+  const tempToken = `jwt_session_${user.userId}_${Date.now()}`;
+  DB.activeSessions[tempToken] = user;
+
+  appendAuditLog("Auth", "Info", `OTP sent to email: ${normalizedEmail}`, req.ip);
+
+  return res.json({ status: "success", tempToken });
+});
+
 app.post("/api/auth/verify-otp", (req, res) => {
   const authHeader = req.headers.authorization;
   const { otp } = req.body;
@@ -935,7 +1038,109 @@ app.post("/api/auth/verify-otp", (req, res) => {
   }
 });
 
-app.post("/api/auth/resend-otp", (req, res) => {
+// Endpoint to handle Firebase login / magic link resolution
+app.post("/api/auth/firebase-login", async (req: any, res: any) => {
+  const { uid, email, name, providerData } = req.body;
+  if (!uid || !email) {
+    return res.status(400).json({ status: "error", message: "Firebase UID and Email are required." });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+
+  // Ensure DB users are synced first
+  if (db) {
+    try {
+      const snap = await getDocs(collection(db, "users"));
+      const fsUsers: any[] = [];
+      snap.forEach(d => fsUsers.push(d.data()));
+      if (fsUsers.length > 0) {
+        for (const fsu of fsUsers) {
+          const idx = DB.users.findIndex(u => u.email === fsu.email);
+          if (idx !== -1) {
+            DB.users[idx] = fsu;
+          } else {
+            DB.users.push(fsu);
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  let user = DB.users.find(u => u.email === normalizedEmail);
+
+  if (!user) {
+    // Register the user via Firebase metadata if not exists
+    user = {
+      userId: uid,
+      email: normalizedEmail,
+      name: name || normalizedEmail.split("@")[0],
+      passwordHash: "FIREBASE_MANAGED",
+      role: "User",
+      isTwoFactorSetup: false,
+      isOtpVerified: true,
+      portfolio: [],
+      alerts: [],
+      transactions: [],
+      devices: [],
+      loginHistory: [],
+      accountCreationDate: new Date().toISOString()
+    };
+    DB.users.push(user);
+    if (db) {
+      try {
+        await setDoc(doc(db, "users", user.userId), user);
+      } catch(e) {
+        console.error("Failed to register Firebase user in DB:", e);
+      }
+    }
+    appendAuditLog("Auth", "Info", `Newly registered User via Firebase: ${normalizedEmail}`, req.ip);
+  }
+
+  const token = `jwt_session_${user.userId}_${Date.now()}`;
+  user.isOtpVerified = true; // Firebase already authenticated them securely
+
+  const responseUser = {
+    userId: user.userId,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    isTwoFactorSetup: user.isTwoFactorSetup,
+    isOtpVerified: user.isOtpVerified,
+    token
+  };
+
+  DB.activeSessions[token] = user;
+  
+  const rawUserAgent = req.headers['user-agent'] || 'Unknown Device';
+  const userAgent = rawUserAgent.substring(0, 500);
+  const newSessionId = `session_${Date.now()}_${Math.floor(Math.random()*1000)}`;
+  const rawIp = req.ip || "127.0.0.1";
+  const ipAddress = rawIp.substring(0, 100);
+
+  const sessionRecord = {
+    id: newSessionId,
+    userId: user.userId,
+    email: user.email,
+    ipAddress,
+    userAgent,
+    loginTimestamp: new Date().toISOString()
+  };
+  DB.userSessions.push(sessionRecord);
+
+  if (db) {
+    try {
+      setDoc(doc(db, "userSessions", newSessionId), sessionRecord).catch(err => console.error("Firebase write error:", err));
+    } catch (e) {
+      console.error("Error setting session doc", e);
+    }
+  }
+
+  appendAuditLog("Auth", "Info", `Successful Firebase login session for: ${normalizedEmail}`, req.ip, userAgent);
+
+  return res.json({ status: "success", session: responseUser });
+});
+
+app.post("/api/auth/resend-otp", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).json({ status: "error", message: "Unauthorized credentials." });
@@ -956,12 +1161,39 @@ app.post("/api/auth/resend-otp", (req, res) => {
   user.otpSecret = generatedOtp;
   user.otpExpiry = Date.now() + 5 * 60 * 1000; // 5 mins
   user.lastOtpSentAt = Date.now();
-  console.log(`[Email Mock] Resent OTP ${generatedOtp} to ${user.email}`);
+
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '465'),
+        secure: parseInt(process.env.SMTP_PORT || '465') === 465, 
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      await transporter.sendMail({
+        from: `"Private Wealth Portal" <${process.env.SMTP_USER}>`,
+        to: user.email,
+        subject: "Your Authentication Code",
+        text: `Your new OTP is: ${generatedOtp}. It will expire in 5 minutes.`,
+        html: `<p>Your new secure OTP is: <strong>${generatedOtp}</strong></p><p>It will expire in 5 minutes.</p>`,
+      });
+      console.log(`[Email] Successfully resent OTP to ${user.email}`);
+    } catch (error) {
+      console.error("[Email Error] Failed to resend email via SMTP", error);
+      return res.status(500).json({ status: "error", message: "Failed to send email. Please check SMTP configuration." });
+    }
+  } else {
+    console.log(`[Email Mock] Resent OTP ${generatedOtp} to ${user.email} (SMTP not configured)`);
+  }
 
   return res.json({ status: "success", message: "A verification code has been sent to your registered email address." });
 });
 
-app.post("/api/auth/setup-2fa", (req, res) => {
+app.post("/api/auth/setup-2fa", async (req, res) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).json({ status: "error", message: "Unauthorized credentials." });
@@ -975,6 +1207,7 @@ app.post("/api/auth/setup-2fa", (req, res) => {
   }
 
   user.isTwoFactorSetup = !user.isTwoFactorSetup;
+  await syncUserToFirestore(user);
   appendAuditLog("Auth", "Info", `2FA setting toggled to: ${user.isTwoFactorSetup} for user ${user.email}`, req.ip);
 
   return res.json({
@@ -1015,7 +1248,7 @@ app.get("/api/portfolio", requireAuth, (req: any, res) => {
   return res.json({ status: "success", portfolio: req.user.portfolio });
 });
 
-app.post("/api/portfolio/add", requireAuth, (req: any, res) => {
+app.post("/api/portfolio/add", requireAuth, async (req: any, res) => {
   const { symbol, quantity, price } = req.body;
   if (!symbol || !quantity || !price) {
     return res.status(400).json({ status: "error", message: "symbol, quantity, and price target parameters are required." });
@@ -1062,11 +1295,12 @@ app.post("/api/portfolio/add", requireAuth, (req: any, res) => {
     status: "Completed"
   });
 
+  await syncUserToFirestore(req.user);
   appendAuditLog("Portfolio", "Info", `Asset bought: Bought ${qty} shares of ${symbol} at $${prc}`, req.user.email);
   return res.json({ status: "success", portfolio: req.user.portfolio, transactions: req.user.transactions });
 });
 
-app.post("/api/portfolio/sell", requireAuth, (req: any, res) => {
+app.post("/api/portfolio/sell", requireAuth, async (req: any, res) => {
   const { symbol, quantity } = req.body;
   if (!symbol || !quantity) {
     return res.status(400).json({ status: "error", message: "symbol and quantity are required." });
@@ -1105,6 +1339,7 @@ app.post("/api/portfolio/sell", requireAuth, (req: any, res) => {
     profitOrLoss
   });
 
+  await syncUserToFirestore(req.user);
   appendAuditLog("Portfolio", "Info", `Asset sold: Sold ${qty} shares of ${sym}`, req.user.email);
   return res.json({ status: "success", portfolio: req.user.portfolio, transactions: req.user.transactions });
 });
@@ -1117,7 +1352,7 @@ app.get("/api/alerts", requireAuth, (req: any, res) => {
   return res.json({ status: "success", alerts: req.user.alerts });
 });
 
-app.post("/api/alerts", requireAuth, (req: any, res) => {
+app.post("/api/alerts", requireAuth, async (req: any, res) => {
   const { symbol, type, value, channel } = req.body;
   if (!symbol || !type || !value || !channel) {
     return res.status(400).json({ status: "error", message: "symbol, type, value, and alert channel are required parameters." });
@@ -1136,11 +1371,12 @@ app.post("/api/alerts", requireAuth, (req: any, res) => {
   };
 
   req.user.alerts.push(newAlert);
+  await syncUserToFirestore(req.user);
   appendAuditLog("Alert", "Info", `Configured ${type} alert limit for ${symbol} at value ${value} via ${channel}`, req.user.email);
   return res.json({ status: "success", alert: newAlert });
 });
 
-app.delete("/api/alerts/:id", requireAuth, (req: any, res) => {
+app.delete("/api/alerts/:id", requireAuth, async (req: any, res) => {
   const { id } = req.params;
   const idx = req.user.alerts.findIndex((a: AlertConfig) => a.id === id);
   if (idx === -1) {
@@ -1148,6 +1384,7 @@ app.delete("/api/alerts/:id", requireAuth, (req: any, res) => {
   }
 
   const deleted = req.user.alerts.splice(idx, 1)[0];
+  await syncUserToFirestore(req.user);
   appendAuditLog("Alert", "Info", `Discharged alert preset: ${deleted.type} for ${deleted.symbol}`, req.user.email);
   return res.json({ status: "success", message: "Alert config removed successfully." });
 });

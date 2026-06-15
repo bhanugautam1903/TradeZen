@@ -1,16 +1,18 @@
-import React, { useState, useRef } from 'react';
-import { Lock, Mail, Github, Zap, Fingerprint, RefreshCcw, ShieldCheck, ArrowRight, Activity, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Mail, RefreshCcw, ArrowRight, Fingerprint } from 'lucide-react';
+import { auth, googleProvider, appleProvider } from '../lib/firebase';
+import { signInWithPopup } from 'firebase/auth';
 
 interface AuthScreenProps {
   onLogin: (sessionData: any) => void;
 }
 
 export default function AuthScreen({ onLogin }: AuthScreenProps) {
-  const [view, setView] = useState<'login' | 'register' | 'forgot' | 'mfa'>('login');
+  const [view, setView] = useState<'login' | 'mfa'>('login');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  
   const [mfaCode, setMfaCode] = useState(['', '', '', '', '', '']);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -35,30 +37,53 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
     }
   };
 
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
+  const handleBackendLogin = async (user: any) => {
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch('/api/auth/firebase-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({
+          uid: user.uid,
+          email: user.email,
+          name: user.displayName || '',
+          providerData: user.providerData
+        })
       });
       const data = await res.json();
       if (res.ok && data.status === 'success') {
-        // Handle OTP requirement
-        if (data.requires2fa) {
-          sessionStorage.setItem('tempToken', data.session.token);
-          setView('mfa');
-        } else {
-          onLogin(data.session);
-        }
+        onLogin(data.session);
       } else {
-        alert(data.message || 'Login failed');
+        setMessage({ text: data.message || 'Failed to sync with backend server', type: 'error' });
       }
     } catch (err) {
       console.error(err);
-      alert('Network error during login.');
+      setMessage({ text: 'Network error authorizing terminal session.', type: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleEmailOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email) return;
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/auth/send-email-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success') {
+        sessionStorage.setItem('tempToken', data.tempToken);
+        setView('mfa');
+        setMessage(null);
+      } else {
+        setMessage({ text: data.message || 'Failed to send OTP code.', type: 'error' });
+      }
+    } catch (err: any) {
+      setMessage({ text: 'Network connection error.', type: 'error' });
     } finally {
       setIsLoading(false);
     }
@@ -67,42 +92,26 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
   const [otpTimer, setOtpTimer] = useState(0);
 
   const handleResendOtp = async () => {
-    const tempToken = sessionStorage.getItem('tempToken');
-    if (!tempToken) return;
-    try {
-      const res = await fetch('/api/auth/resend-otp', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${tempToken}`
-        }
-      });
-      const data = await res.json();
-      if (res.ok && data.status === 'success') {
-        alert(data.message);
-        setOtpTimer(60);
-      } else {
-        alert(data.message || 'Failed to resend OTP');
-      }
-    } catch (err) {
-      alert('Network error');
-    }
+    handleEmailOtpSubmit({ preventDefault: () => {} } as any);
+    setOtpTimer(60);
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (otpTimer > 0) {
       const timer = setTimeout(() => setOtpTimer(otpTimer - 1), 1000);
       return () => clearTimeout(timer);
     }
   }, [otpTimer]);
 
-  const handleMfaSubmit = async (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setMessage(null);
     const tempToken = sessionStorage.getItem('tempToken');
     try {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
-        headers: {
+        headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${tempToken}`
         },
@@ -113,11 +122,23 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
         sessionStorage.removeItem('tempToken');
         onLogin(data.session);
       } else {
-        alert(data.message || 'Invalid OTP');
+        setMessage({ text: data.message || 'Invalid OTP code.', type: 'error' });
       }
-    } catch (err) {
-      alert('Network error during verification');
+    } catch (err: any) {
+      setMessage({ text: 'Network verification error.', type: 'error' });
     } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleProviderSignIn = async (provider: any) => {
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      const result = await signInWithPopup(auth, provider);
+      await handleBackendLogin(result.user);
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Authentication provider error', type: 'error' });
       setIsLoading(false);
     }
   };
@@ -128,16 +149,10 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
         <div className="flex justify-center mb-6 relative">
           <div className="absolute inset-0 bg-teal-500/20 blur-[24px] rounded-full scale-125 pointer-events-none"></div>
           <svg className="w-16 h-16 drop-shadow-xl relative z-10" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-            {/* Elegant Zen Arc */}
             <circle cx="50" cy="50" r="36" stroke="url(#zen-grad)" strokeWidth="6" strokeLinecap="round" strokeDasharray="170 60" />
-            
-            {/* Upward minimalist arrow */}
             <path d="M 35 65 L 72 28" stroke="#f8fafc" strokeWidth="5" strokeLinecap="round" />
             <path d="M 52 28 L 72 28 L 72 48" stroke="#f8fafc" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-            
-            {/* Base accent */}
             <circle cx="35" cy="65" r="4" fill="#34d399" />
-
             <defs>
               <linearGradient id="zen-grad" x1="14" y1="86" x2="86" y2="14" gradientUnits="userSpaceOnUse">
                 <stop stopColor="#0f766e" />
@@ -154,18 +169,23 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-slate-900/60 backdrop-blur-xl py-8 px-4 shadow-[0_0_40px_rgba(20,184,166,0.05)] sm:rounded-2xl sm:px-10 border border-slate-800/80 relative overflow-hidden">
           
-          {/* Decorative glow */}
           <div className="absolute -top-32 -right-32 w-64 h-64 bg-teal-500/10 rounded-full blur-3xl pointer-events-none" />
           <div className="absolute -bottom-32 -left-32 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+          {message && (
+            <div className={`mb-4 mx-4 mt-2 p-3 rounded-lg text-sm font-semibold border relative z-10 ${message.type === 'success' ? 'bg-teal-500/10 border-teal-500/50 text-teal-400' : message.type === 'error' ? 'bg-rose-500/10 border-rose-500/50 text-rose-400' : 'bg-blue-500/10 border-blue-500/50 text-blue-400'}`}>
+              {message.text}
+            </div>
+          )}
 
           {view === 'login' && (
             <div className="relative z-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="text-center mb-6">
                 <h3 className="text-xl font-bold text-white">Private Wealth Portal</h3>
-                <p className="text-xs text-slate-500 mt-1">Access your portfolio and market insights</p>
+                <p className="text-xs text-slate-500 mt-1">Access your portfolio with Multi-Factor Authentication</p>
               </div>
 
-              <form className="space-y-5" onSubmit={handleLoginSubmit}>
+              <form className="space-y-5" onSubmit={handleEmailOtpSubmit}>
                 <div>
                   <label className="block text-sm font-bold text-slate-400 mb-1.5 font-mono">Email Address</label>
                   <div className="relative">
@@ -182,41 +202,14 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-sm font-bold text-slate-400 font-mono">Password</label>
-                    <button type="button" onClick={() => setView('forgot')} className="text-xs font-semibold text-teal-400 hover:text-teal-300 transition-colors">
-                      Reset Password?
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <Lock className="h-4 w-4 text-slate-500" />
-                    </div>
-                    <input
-                      type={showPassword ? 'text' : 'password'} required
-                      value={password} onChange={e => setPassword(e.target.value)}
-                      className="block w-full pl-10 pr-10 py-2.5 border border-slate-700 rounded-lg bg-slate-950/80 text-white text-sm placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent transition-all"
-                      placeholder="••••••••••••"
-                    />
-                    <button 
-                      type="button" 
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-300 transition-colors"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
                   <button
                     type="submit" disabled={isLoading}
                     className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-bold text-slate-950 bg-teal-500 hover:bg-teal-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500 focus:ring-offset-slate-900 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
                   >
                     {isLoading ? (
-                      <span className="flex items-center gap-2"><RefreshCcw className="w-4 h-4 animate-spin" /> Verifying...</span>
+                      <span className="flex items-center gap-2"><RefreshCcw className="w-4 h-4 animate-spin" /> Transmitting...</span>
                     ) : (
-                      <span className="flex items-center gap-2">Access Wealth Dashboard <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></span>
+                      <span className="flex items-center gap-2">Send Secure OTP Code <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></span>
                     )}
                   </button>
                 </div>
@@ -228,12 +221,14 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                     <div className="w-full border-t border-slate-700" />
                   </div>
                   <div className="relative flex justify-center text-sm">
-                    <span className="px-2 bg-slate-900 text-slate-500 text-[10px] font-mono uppercase tracking-widest">Or continue with</span>
+                    <span className="px-2 bg-slate-900 text-slate-500 text-[10px] font-mono uppercase tracking-widest">Or authenticate via provider</span>
                   </div>
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-3">
-                  <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-slate-700 shadow-sm text-sm font-semibold rounded-lg text-slate-300 bg-slate-800 hover:bg-slate-700 focus:outline-none transition-colors">
+                  <button 
+                    onClick={(e) => { e.preventDefault(); handleProviderSignIn(googleProvider); }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-slate-700 shadow-sm text-sm font-semibold rounded-lg text-slate-300 bg-slate-800 hover:bg-slate-700 focus:outline-none transition-colors">
                     <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                       <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
                       <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
@@ -242,7 +237,9 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                     </svg>
                     Google
                   </button>
-                  <button className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-slate-700 shadow-sm text-sm font-semibold rounded-lg text-slate-300 bg-slate-800 hover:bg-slate-700 focus:outline-none transition-colors">
+                  <button 
+                    onClick={(e) => { e.preventDefault(); handleProviderSignIn(appleProvider); }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-slate-700 shadow-sm text-sm font-semibold rounded-lg text-slate-300 bg-slate-800 hover:bg-slate-700 focus:outline-none transition-colors">
                     <svg className="w-4 h-4 shrink-0 text-slate-300" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.126 3.805 3.078 1.52-.048 2.122-.962 3.94-.962 1.802 0 2.366.962 3.96.936 1.636-.026 2.66-1.5 3.65-2.937 1.144-1.666 1.614-3.284 1.636-3.366-.037-.015-3.149-1.206-3.176-4.814-.022-3.021 2.47-4.475 2.585-4.555-1.425-2.079-3.623-2.362-4.409-2.417-1.745-.116-3.483 1.084-4.321 1.084-.816 0-2.222-1.053-3.77-1.01z" />
                       <path d="M14.773 4.383c.795-.964 1.332-2.302 1.186-3.619-1.127.045-2.54.747-3.361 1.733-.733.873-1.339 2.238-1.17 3.528 1.258.098 2.541-.676 3.345-1.642z" />
@@ -251,94 +248,6 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                   </button>
                 </div>
               </div>
-
-              <p className="mt-6 text-center text-xs text-slate-400">
-                New to TradeZen?{' '}
-                <button onClick={() => setView('register')} className="font-semibold text-teal-400 hover:text-teal-300">
-                  Create Account
-                </button>
-              </p>
-            </div>
-          )}
-
-          {view === 'register' && (
-            <div className="relative z-10 animate-in fade-in slide-in-from-right-4 duration-500">
-              <div className="text-center mb-6">
-                <h3 className="text-xl font-bold text-white">Create Account</h3>
-                <p className="text-xs text-slate-500 mt-1">Register for a verified terminal segment</p>
-              </div>
-
-              <form className="space-y-4" onSubmit={async (e) => {
-                e.preventDefault();
-                setIsLoading(true);
-                const formData = new FormData(e.currentTarget);
-                const registerEmail = formData.get('email') as string;
-                const registerName = formData.get('name') as string;
-                const registerPassword = formData.get('password') as string;
-                try {
-                  const res = await fetch('/api/auth/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: registerEmail, name: registerName, password: registerPassword })
-                  });
-                  const data = await res.json();
-                  if (res.ok && data.status === 'success') {
-                    onLogin(data.session);
-                  } else {
-                    alert(data.message || 'Registration failed');
-                  }
-                } catch (err) {
-                  alert('Network error during registration.');
-                } finally {
-                  setIsLoading(false);
-                }
-              }}>
-                <div>
-                  <label className="block text-sm font-bold text-slate-400 mb-1.5 font-mono">Full Legal Name</label>
-                  <input name="name" type="text" required className="block w-full px-3 py-2.5 border border-slate-700 rounded-lg bg-slate-950/80 text-white text-sm focus:ring-teal-500 focus:border-teal-500" placeholder="John Doe" />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-slate-400 mb-1.5 font-mono">Email Address</label>
-                  <input name="email" type="email" required className="block w-full px-3 py-2.5 border border-slate-700 rounded-lg bg-slate-950/80 text-white text-sm focus:ring-teal-500 focus:border-teal-500" placeholder="investor@example.com" />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-slate-400 mb-1.5 font-mono">Password</label>
-                  <input name="password" type="password" required className="block w-full px-3 py-2.5 border border-slate-700 rounded-lg bg-slate-950/80 text-white text-sm focus:ring-teal-500 focus:border-teal-500" placeholder="••••••••••••" />
-                </div>
-                <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg font-bold text-slate-950 bg-teal-500 hover:bg-teal-400 transition-all mt-6">
-                  {isLoading ? 'Encrypting Profile...' : 'Submit Registration'}
-                </button>
-              </form>
-
-              <button onClick={() => setView('login')} className="mt-6 w-full text-center text-xs text-slate-400 hover:text-white transition-colors">
-                ← Back to Login
-              </button>
-            </div>
-          )}
-
-          {view === 'forgot' && (
-            <div className="relative z-10 animate-in fade-in slide-in-from-left-4 duration-500">
-               <div className="text-center mb-6">
-                <div className="w-12 h-12 bg-amber-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-amber-500/20">
-                  <Lock className="w-6 h-6 text-amber-500" />
-                </div>
-                <h3 className="text-xl font-bold text-white">Reset Credentials</h3>
-                <p className="text-xs text-slate-500 mt-1">We'll dispatch a secure recovery token to your registered node.</p>
-              </div>
-
-              <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); alert("Password reset workflow initiated."); setView('login'); }}>
-                <div>
-                  <label className="block text-sm font-bold text-slate-400 mb-1.5 font-mono">Recovery Email</label>
-                  <input type="email" required className="block w-full px-3 py-2.5 border border-slate-700 rounded-lg bg-slate-950/80 text-white text-sm focus:ring-teal-500 focus:border-teal-500" placeholder="investor@example.com" />
-                </div>
-                <button type="submit" disabled={isLoading} className="w-full py-2.5 px-4 rounded-lg font-bold text-slate-950 bg-teal-500 hover:bg-teal-400 transition-all">
-                  {isLoading ? 'Dispatching...' : 'Send Recovery Packet'}
-                </button>
-              </form>
-              
-              <button onClick={() => setView('login')} className="mt-6 w-full text-center text-xs text-slate-400 hover:text-white transition-colors">
-                ← Return to Terminal
-              </button>
             </div>
           )}
 
@@ -349,10 +258,10 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
                   <Fingerprint className="w-6 h-6 text-indigo-400" />
                 </div>
                 <h3 className="text-xl font-bold text-white">Verify Your Identity</h3>
-                <p className="text-xs text-slate-500 mt-1">Check your email for the 6-digit verification code. <span className="font-mono text-teal-400 bg-teal-500/10 px-1 py-0.5 rounded">(Demo OTP: 123456)</span></p>
+                <p className="text-xs text-slate-500 mt-1">Check your email for the 6-digit verification code. <span className="font-mono text-teal-400 bg-teal-500/10 px-1 py-0.5 rounded">(Or check terminal for mock OTP)</span></p>
               </div>
 
-              <form className="space-y-4" onSubmit={handleMfaSubmit}>
+              <form className="space-y-4" onSubmit={handleVerifyOtp}>
                 <div className="flex justify-center gap-2">
                   {[0, 1, 2, 3, 4, 5].map(i => (
                     <input 
@@ -396,3 +305,4 @@ export default function AuthScreen({ onLogin }: AuthScreenProps) {
     </div>
   );
 }
+

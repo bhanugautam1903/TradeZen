@@ -82,9 +82,19 @@ const formatFinancialValue = (valueStr: string | number, alwaysShowSign = false)
 
 export default function App() {
   // Theme & Session states
-  const [session, setSession] = useState<any>(null);
+// In App.tsx:
+const [session, setSession] = useState<any>(() => {
+  const saved = localStorage.getItem('tradezen_session');
+  return saved ? JSON.parse(saved) : null;
+});
 
-
+useEffect(() => {
+  if (session) {
+    localStorage.setItem('tradezen_session', JSON.stringify(session));
+  } else {
+    localStorage.removeItem('tradezen_session');
+  }
+}, [session]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'prediction' | 'sentiment' | 'portfolio' | 'assistant' | 'community' | 'alerts' | 'audits' | 'multimodal' | 'profile'>('dashboard');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('AAPL');
   
@@ -1985,7 +1995,7 @@ export default function App() {
                     <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 mt-3 text-xs text-slate-400">
                       <span className="flex items-center gap-1.5"><Locate className="w-3.5 h-3.5" /> {profileData?.country || 'Not Set'}</span>
                       <span className="flex items-center gap-1.5"><Settings className="w-3.5 h-3.5" /> {profileData?.subscriptionPlan || 'Basic Plan'}</span>
-                      <span className="bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded font-mono font-bold uppercase border border-emerald-500/20">{session.role} User</span>
+                      <span className="bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded font-mono font-bold uppercase border border-emerald-500/20">{session.role} Account</span>
                     </div>
                   </div>
                   <div className="flex gap-3">
