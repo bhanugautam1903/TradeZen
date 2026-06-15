@@ -1462,7 +1462,7 @@ export default function App() {
                         {credReport.warnings && credReport.warnings.length > 0 && (
                           <div className="space-y-1 bg-slate-900/50 p-2.5 rounded border border-slate-850">
                             <span className="text-[10px] text-slate-500 font-mono font-bold uppercase block">Spam Warning Details:</span>
-                            {credReport.warnings.map((w: string, i: number) => (
+                            {(Array.isArray(credReport.warnings) ? credReport.warnings : [credReport.warnings]).map((w: string, i: number) => (
                               <p key={i} className="text-rose-400 font-mono text-[10px] flex items-start gap-1.5 leading-relaxed">
                                 <span>•</span> <span>{w}</span>
                               </p>
@@ -1517,7 +1517,7 @@ export default function App() {
 
                         <div className="space-y-1.5">
                           <span className="text-[10px] text-slate-500 uppercase font-mono block">Observed Activity Indicators:</span>
-                          {botReport.behaviorIndicators?.map((ind: string, i: number) => (
+                          {botReport.behaviorIndicators && (Array.isArray(botReport.behaviorIndicators) ? botReport.behaviorIndicators : [botReport.behaviorIndicators]).map((ind: string, i: number) => (
                             <p key={i} className="text-slate-300 text-[11px] flex items-start gap-1 leading-relaxed">
                               <span className="text-indigo-450 font-bold">•</span> <span>{ind}</span>
                             </p>
@@ -2353,7 +2353,7 @@ export default function App() {
                         <div className="md:col-span-2 bg-slate-900 border border-slate-800 p-3.5 rounded-lg space-y-3">
                           <span className="text-[10px] font-mono uppercase font-bold text-slate-400 tracking-wider">SIGNAL CLASSIFICATION</span>
                           <div className="flex flex-wrap gap-2">
-                            {multimodalReport.signalTags?.map((tag: any, idx: number) => (
+                            {multimodalReport.signalTags && (Array.isArray(multimodalReport.signalTags) ? multimodalReport.signalTags : [multimodalReport.signalTags]).map((tag: any, idx: number) => (
                               <div key={idx} className="flex items-center gap-1.5 bg-slate-950 border border-slate-850 px-2 py-1 rounded text-[10px]">
                                 <span className="text-slate-400">{tag.label} →</span>
                                 <span className={`font-bold ${
@@ -2371,7 +2371,7 @@ export default function App() {
                       <div className="space-y-2">
                         <span className="text-[11px] font-mono uppercase font-bold text-teal-400 tracking-wider block border-b border-slate-900 pb-1">EXECUTIVE SUMMARY</span>
                         <ul className="text-slate-300 text-[11px] leading-loose space-y-1 pl-1">
-                           {multimodalReport.executiveSummary?.map((point: string, idx: number) => (
+                           {multimodalReport.executiveSummary && (Array.isArray(multimodalReport.executiveSummary) ? multimodalReport.executiveSummary : [multimodalReport.executiveSummary]).map((point: string, idx: number) => (
                              <li key={idx} className="flex items-start gap-2">
                                <span className="text-teal-500 shrink-0 mt-1">•</span>
                                <span>{point.replace(/^[•\-\*]\s*/, '')}</span>
