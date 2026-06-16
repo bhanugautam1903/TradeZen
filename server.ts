@@ -4,7 +4,7 @@
  */
 
 import express from "express";
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
@@ -962,22 +962,12 @@ app.post("/api/auth/send-email-otp", async (req, res) => {
   user.otpSecret = generatedOtp;
   user.otpExpiry = Date.now() + 5 * 60 * 1000;
   
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  if (process.env.RESEND_API_KEY) {
     try {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.SMTP_PORT || '465'),
-        secure: parseInt(process.env.SMTP_PORT || '465') === 465, 
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-        tls: { rejectUnauthorized: false },
-        family: 4
-      });
-
-      await transporter.sendMail({
-        from: `"Private Wealth Portal" <${process.env.SMTP_USER}>`,
+      const resend = new Resend(process.env.RESEND_API_KEY);
+      
+      await resend.emails.send({
+        from: 'Private Wealth Portal <onboarding@resend.dev>',
         to: normalizedEmail,
         subject: "Your Authentication Code",
         text: `Your OTP is: ${generatedOtp}. It will expire in 5 minutes.`,
@@ -985,12 +975,12 @@ app.post("/api/auth/send-email-otp", async (req, res) => {
       });
       console.log(`[Email] Successfully sent OTP to ${normalizedEmail}`);
     } catch (error) {
-      console.error("[Email Error] Failed to send email via SMTP", error);
-      return res.status(500).json({ status: "error", message: "Failed to send email. Please check SMTP configuration in Secrets." });
+      console.error("[Email Error] Failed to send email via Resend", error);
+      return res.status(500).json({ status: "error", message: "Failed to send email. Please check configuration." });
     }
   } else {
-    console.log(`[Email Mock] Sent OTP ${generatedOtp} to ${normalizedEmail} (SMTP not configured)`);
-    return res.status(500).json({ status: "error", message: "SMTP configuration is missing. Configure SMTP_HOST, SMTP_USER, and SMTP_PASS in Secrets to send real emails." });
+    console.log(`[Email Mock] Sent OTP ${generatedOtp} to ${normalizedEmail} (RESEND_API_KEY not configured)`);
+    return res.status(500).json({ status: "error", message: "Email API configuration is missing. Configure RESEND_API_KEY in Settings > Secrets to send real emails." });
   }
 
   const tempToken = `jwt_session_${user.userId}_${Date.now()}`;
@@ -1168,22 +1158,12 @@ app.post("/api/auth/resend-otp", async (req, res) => {
   user.otpExpiry = Date.now() + 5 * 60 * 1000; // 5 mins
   user.lastOtpSentAt = Date.now();
 
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  if (process.env.RESEND_API_KEY) {
     try {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || 'smtp.gmail.com',
-        port: parseInt(process.env.SMTP_PORT || '465'),
-        secure: parseInt(process.env.SMTP_PORT || '465') === 465, 
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-        tls: { rejectUnauthorized: false },
-        family: 4
-      });
+      const resend = new Resend(process.env.RESEND_API_KEY);
 
-      await transporter.sendMail({
-        from: `"Private Wealth Portal" <${process.env.SMTP_USER}>`,
+      await resend.emails.send({
+        from: 'Private Wealth Portal <onboarding@resend.dev>',
         to: user.email,
         subject: "Your Authentication Code",
         text: `Your new OTP is: ${generatedOtp}. It will expire in 5 minutes.`,
@@ -1191,11 +1171,11 @@ app.post("/api/auth/resend-otp", async (req, res) => {
       });
       console.log(`[Email] Successfully resent OTP to ${user.email}`);
     } catch (error) {
-      console.error("[Email Error] Failed to resend email via SMTP", error);
-      return res.status(500).json({ status: "error", message: "Failed to send email. Please check SMTP configuration." });
+      console.error("[Email Error] Failed to resend email via Resend", error);
+      return res.status(500).json({ status: "error", message: "Failed to send email. Please check configuration." });
     }
   } else {
-    console.log(`[Email Mock] Resent OTP ${generatedOtp} to ${user.email} (SMTP not configured)`);
+    console.log(`[Email Mock] Resent OTP ${generatedOtp} to ${user.email} (RESEND_API_KEY not configured)`);
   }
 
   return res.json({ status: "success", message: "A verification code has been sent to your registered email address." });
