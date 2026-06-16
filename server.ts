@@ -964,23 +964,17 @@ app.post("/api/auth/send-email-otp", async (req, res) => {
   
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
-      const transporterConfig = process.env.SMTP_HOST.includes('gmail') ? {
-        service: 'gmail',
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.SMTP_PORT || '465'),
+        secure: parseInt(process.env.SMTP_PORT || '465') === 465, 
         auth: {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS,
         },
-      } : {
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || '587'),
-        secure: parseInt(process.env.SMTP_PORT || '587') === 465, 
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      };
-
-      const transporter = nodemailer.createTransport(transporterConfig as any);
+        tls: { rejectUnauthorized: false },
+        family: 4
+      });
 
       await transporter.sendMail({
         from: `"Private Wealth Portal" <${process.env.SMTP_USER}>`,
@@ -1176,23 +1170,17 @@ app.post("/api/auth/resend-otp", async (req, res) => {
 
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
-      const transporterConfig = process.env.SMTP_HOST.includes('gmail') ? {
-        service: 'gmail',
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: parseInt(process.env.SMTP_PORT || '465'),
+        secure: parseInt(process.env.SMTP_PORT || '465') === 465, 
         auth: {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS,
         },
-      } : {
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || '587'),
-        secure: parseInt(process.env.SMTP_PORT || '587') === 465, 
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      };
-
-      const transporter = nodemailer.createTransport(transporterConfig as any);
+        tls: { rejectUnauthorized: false },
+        family: 4
+      });
 
       await transporter.sendMail({
         from: `"Private Wealth Portal" <${process.env.SMTP_USER}>`,
