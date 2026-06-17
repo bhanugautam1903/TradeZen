@@ -4,7 +4,7 @@
  */
 
 import express from "express";
-import { Resend } from "resend";
+
 import path from "path";
 import fs from "fs";
 import dotenv from "dotenv";
@@ -962,25 +962,38 @@ app.post("/api/auth/send-email-otp", async (req, res) => {
   user.otpSecret = generatedOtp;
   user.otpExpiry = Date.now() + 5 * 60 * 1000;
   
-  if (process.env.RESEND_API_KEY) {
+  if (process.env.BREVO_API_KEY && process.env.BREVO_SENDER_EMAIL) {
     try {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      
-      await resend.emails.send({
-        from: 'Private Wealth Portal <onboarding@resend.dev>',
-        to: normalizedEmail,
-        subject: "Your Authentication Code",
-        text: `Your OTP is: ${generatedOtp}. It will expire in 5 minutes.`,
-        html: `<p>Your secure OTP is: <strong>${generatedOtp}</strong></p><p>It will expire in 5 minutes.</p>`,
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: { 
+            name: "Private Wealth Portal", 
+            email: process.env.BREVO_SENDER_EMAIL 
+          },
+          to: [{ email: normalizedEmail }],
+          subject: "Your Authentication Code",
+          htmlContent: `<p>Your secure OTP is: <strong>${generatedOtp}</strong></p><p>It will expire in 5 minutes.</p>`
+        })
       });
+
+      if (!response.ok) {
+        throw new Error(`Brevo API Error: ${response.statusText}`);
+      }
+
       console.log(`[Email] Successfully sent OTP to ${normalizedEmail}`);
     } catch (error) {
-      console.error("[Email Error] Failed to send email via Resend", error);
+      console.error("[Email Error] Failed to send email via Brevo", error);
       return res.status(500).json({ status: "error", message: "Failed to send email. Please check configuration." });
     }
   } else {
-    console.log(`[Email Mock] Sent OTP ${generatedOtp} to ${normalizedEmail} (RESEND_API_KEY not configured)`);
-    return res.status(500).json({ status: "error", message: "Email API configuration is missing. Configure RESEND_API_KEY in Settings > Secrets to send real emails." });
+    console.log(`[Email Mock] Sent OTP ${generatedOtp} to ${normalizedEmail} (BREVO_API_KEY not configured)`);
+    return res.status(500).json({ status: "error", message: "Email API configuration is missing. Configure BREVO_API_KEY and BREVO_SENDER_EMAIL in Settings > Secrets to send real emails." });
   }
 
   const tempToken = `jwt_session_${user.userId}_${Date.now()}`;
@@ -1158,24 +1171,37 @@ app.post("/api/auth/resend-otp", async (req, res) => {
   user.otpExpiry = Date.now() + 5 * 60 * 1000; // 5 mins
   user.lastOtpSentAt = Date.now();
 
-  if (process.env.RESEND_API_KEY) {
+  if (process.env.BREVO_API_KEY && process.env.BREVO_SENDER_EMAIL) {
     try {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-
-      await resend.emails.send({
-        from: 'Private Wealth Portal <onboarding@resend.dev>',
-        to: user.email,
-        subject: "Your Authentication Code",
-        text: `Your new OTP is: ${generatedOtp}. It will expire in 5 minutes.`,
-        html: `<p>Your new secure OTP is: <strong>${generatedOtp}</strong></p><p>It will expire in 5 minutes.</p>`,
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          sender: { 
+            name: "Private Wealth Portal", 
+            email: process.env.BREVO_SENDER_EMAIL 
+          },
+          to: [{ email: user.email }],
+          subject: "Your Authentication Code",
+          htmlContent: `<p>Your new secure OTP is: <strong>${generatedOtp}</strong></p><p>It will expire in 5 minutes.</p>`
+        })
       });
+
+      if (!response.ok) {
+        throw new Error(`Brevo API Error: ${response.statusText}`);
+      }
+
       console.log(`[Email] Successfully resent OTP to ${user.email}`);
     } catch (error) {
-      console.error("[Email Error] Failed to resend email via Resend", error);
+      console.error("[Email Error] Failed to resend email via Brevo", error);
       return res.status(500).json({ status: "error", message: "Failed to send email. Please check configuration." });
     }
   } else {
-    console.log(`[Email Mock] Resent OTP ${generatedOtp} to ${user.email} (RESEND_API_KEY not configured)`);
+    console.log(`[Email Mock] Resent OTP ${generatedOtp} to ${user.email} (BREVO_API_KEY not configured)`);
   }
 
   return res.json({ status: "success", message: "A verification code has been sent to your registered email address." });
